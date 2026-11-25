@@ -134,6 +134,10 @@ func checkExtensions(ruleName string, cr *config.ChallengeRules) error {
 }
 
 func New(opts Options) (*Server, error) {
+	if err := validateClearanceCookieOptions(opts); err != nil {
+		return nil, err
+	}
+
 	if len(opts.HS512Secret) > 0 && len(opts.HS512Secret) < sha512.Size {
 		return nil, jwt.ErrInvalidKey
 	}

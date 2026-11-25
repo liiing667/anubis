@@ -59,6 +59,7 @@ var (
 	ErrInvalidRedirect           = errors.New("invalid redirect")
 	ErrRedirectDomainNotAllowed  = errors.New("redirect domain not allowed")
 	ErrUnknownChallengeExtension = errors.New("unknown challenge extension")
+	ErrInsecureClearanceCookie   = errors.New("clearance cookie configuration is insecure")
 )
 
 // validateRedirect validates the form-decoded target without changing its escaping.
@@ -131,6 +132,25 @@ func (s *Server) cookieName(base string) string {
 // settings are ignored.
 func (s *Server) getCookie(r *http.Request, base string) (*http.Cookie, error) {
 	return r.Cookie(s.cookieName(base))
+}
+
+// validateClearanceCookieOptions rejects cookie settings that would make a
+// clearance usable in an unsafe cross-site context. Browsers reject
+// SameSite=None cookies unless they also carry Secure, but non-browser clients
+// do not enforce that invariant. Refuse the combination rather than publishing
+// a bearer clearance that can be replayed cross-site.
+func validateClearanceCookieOptions(opts Options) error {
+	if opts.CookieSameSite == http.SameSiteNoneMode && !opts.CookieSecure {
+		return fmt.Errorf("%w: SameSite=None requires CookieSecure=true; got CookieSecure=false", ErrInsecureClearanceCookie)
+	}
+	return nil
+}
+
+func (s *Server) clearanceCookieAllowed() error {
+	if s == nil {
+		return ErrInsecureClearanceCookie
+	}
+	return validateClearanceCookieOptions(s.opts)
 }
 
 func (s *Server) SetCookie(w http.ResponseWriter, cookieOpts CookieOpts) {

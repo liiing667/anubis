@@ -290,6 +290,7 @@ func TestCookieSettings(t *testing.T) {
 		httpOnly     bool
 		sameSite     http.SameSite
 		wantSameSite http.SameSite
+		wantErr      bool
 		expiration   time.Duration
 	}{
 		{
@@ -311,12 +312,30 @@ func TestCookieSettings(t *testing.T) {
 			expiration:   anubis.CookieDefaultExpirationTime,
 		},
 		{
-			name:         "insecure samesite none downgrades to lax",
-			partitioned:  true,
+			name:        "insecure samesite none is refused",
+			partitioned: true,
+			secure:      false,
+			httpOnly:    false,
+			sameSite:    http.SameSiteNoneMode,
+			wantErr:     true,
+			expiration:  anubis.CookieDefaultExpirationTime,
+		},
+		{
+			name:         "insecure samesite lax continues to work",
+			partitioned:  false,
 			secure:       false,
 			httpOnly:     false,
-			sameSite:     http.SameSiteNoneMode,
+			sameSite:     http.SameSiteLaxMode,
 			wantSameSite: http.SameSiteLaxMode,
+			expiration:   anubis.CookieDefaultExpirationTime,
+		},
+		{
+			name:         "insecure samesite strict continues to work",
+			partitioned:  false,
+			secure:       false,
+			httpOnly:     true,
+			sameSite:     http.SameSiteStrictMode,
+			wantSameSite: http.SameSiteStrictMode,
 			expiration:   anubis.CookieDefaultExpirationTime,
 		},
 		{
@@ -345,7 +364,7 @@ func TestCookieSettings(t *testing.T) {
 			// honeypot bot), so sharing one instance leaks state across cases
 			pol := loadPolicies(t, "testdata/zero_difficulty.yaml", 0)
 
-			srv := spawnAnubis(t, Options{
+			opts := Options{
 				Next:   http.NewServeMux(),
 				Policy: pol,
 
@@ -355,7 +374,19 @@ func TestCookieSettings(t *testing.T) {
 				CookieHttpOnly:    tc.httpOnly,
 				CookieSameSite:    tc.sameSite,
 				CookieExpiration:  tc.expiration,
-			})
+			}
+			if tc.wantErr {
+				srv, err := New(opts)
+				if err == nil {
+					t.Fatal("expected insecure SameSite=None configuration to be rejected")
+				}
+				if srv != nil {
+					t.Fatalf("New returned a server with configuration error: %#v", srv)
+				}
+				return
+			}
+
+			srv := spawnAnubis(t, opts)
 
 			ts := httptest.NewServer(internal.RemoteXRealIP(true, "tcp", srv))
 			defer ts.Close()

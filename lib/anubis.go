@@ -368,6 +368,13 @@ func (s *Server) maybeReverseProxy(w http.ResponseWriter, r *http.Request, httpS
 		return
 	}
 
+	if err := s.clearanceCookieAllowed(); err != nil {
+		lg.ErrorContext(r.Context(), "refusing clearance cookie", "err", err)
+		s.ClearCookie(w, CookieOpts{Path: cookiePath, Host: r.Host})
+		s.RenderIndex(w, r, cr, rule, httpStatusOnly)
+		return
+	}
+
 	if err := ckie.Valid(); err != nil {
 		lg.DebugContext(r.Context(), "cookie is invalid", "err", err)
 		s.ClearCookie(w, CookieOpts{Path: cookiePath, Host: r.Host})
@@ -686,6 +693,13 @@ func (s *Server) PassChallenge(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rule = s.hydrateChallengeRule(rule, chall, lg)
+
+	if err := s.clearanceCookieAllowed(); err != nil {
+		lg.ErrorContext(r.Context(), "refusing to mint clearance cookie", "challenge", chall.ID, "err", err)
+		s.ClearCookie(w, CookieOpts{Path: cookiePath, Host: r.Host})
+		s.respondWithError(w, r, localizer.T("internal_server_error"), makeCode(err))
+		return
+	}
 
 	impl, ok := challenge.Get(chall.Method)
 	if !ok {
