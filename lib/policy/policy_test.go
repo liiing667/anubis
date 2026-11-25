@@ -2,9 +2,9 @@ package policy
 
 import (
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -319,24 +319,20 @@ func TestParseConfigRemoteAddressesURL(t *testing.T) {
 		"prefixes": [{"ipv4Prefix": "20.42.10.176/28"}]
 	}`
 
-	release := make(chan struct{})
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case <-release:
-		case <-r.Context().Done():
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, body)
-	}))
-	t.Cleanup(ts.Close)
+	// Plaintext HTTP is no longer a trusted source, so drive the end-to-end
+	// flow through a local file:// URL instead of an httptest server.
+	feedPath := filepath.Join(t.TempDir(), "prefixes.json")
+	if err := os.WriteFile(feedPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	feedURL := (&url.URL{Scheme: "file", Path: feedPath}).String()
 
 	yaml := fmt.Sprintf(`
 bots:
   - name: openai-searchbot
     action: ALLOW
     remote_addresses_url: %q
-`, ts.URL)
+`, feedURL)
 
 	type parseResult struct {
 		cfg *ParsedConfig
@@ -362,8 +358,6 @@ bots:
 	if len(parsed.Bots) != 1 {
 		t.Fatalf("got %d bots, want 1", len(parsed.Bots))
 	}
-
-	close(release)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Real-IP", "20.42.10.176")

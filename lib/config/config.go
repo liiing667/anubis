@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -203,7 +204,23 @@ func (b *BotConfig) Valid() error {
 func validateRemoteAddressesURL(raw string) error {
 	raw = strings.TrimSpace(raw)
 	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+	if err != nil {
+		return fmt.Errorf("%w: %q", ErrInvalidRemoteAddressesURL, raw)
+	}
+
+	// Only HTTPS endpoints and local file:// URLs are trusted sources for a
+	// prefix list. Plaintext HTTP can be tampered with on the wire, so an
+	// address set fetched over http:// must never replace the trusted set.
+	switch u.Scheme {
+	case "https":
+		if u.Host == "" {
+			return fmt.Errorf("%w: %q", ErrInvalidRemoteAddressesURL, raw)
+		}
+	case "file":
+		if u.Host != "" || u.Path == "" || !filepath.IsAbs(u.Path) {
+			return fmt.Errorf("%w: %q", ErrInvalidRemoteAddressesURL, raw)
+		}
+	default:
 		return fmt.Errorf("%w: %q", ErrInvalidRemoteAddressesURL, raw)
 	}
 	return nil

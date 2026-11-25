@@ -202,6 +202,42 @@ func TestBotValid(t *testing.T) {
 			err: ErrInvalidRemoteAddressesURL,
 		},
 		{
+			name: "remote addresses url plaintext http",
+			bot: BotConfig{
+				Name:               "openai-searchbot",
+				Action:             RuleAllow,
+				RemoteAddressesURL: p("http://example.com/bots.json"),
+			},
+			err: ErrInvalidRemoteAddressesURL,
+		},
+		{
+			name: "remote addresses url file with host",
+			bot: BotConfig{
+				Name:               "openai-searchbot",
+				Action:             RuleAllow,
+				RemoteAddressesURL: p("file://localhost/etc/bots.json"),
+			},
+			err: ErrInvalidRemoteAddressesURL,
+		},
+		{
+			name: "remote addresses url relative file",
+			bot: BotConfig{
+				Name:               "openai-searchbot",
+				Action:             RuleAllow,
+				RemoteAddressesURL: p("file:bots.json"),
+			},
+			err: ErrInvalidRemoteAddressesURL,
+		},
+		{
+			name: "remote addresses url local file",
+			bot: BotConfig{
+				Name:               "openai-searchbot",
+				Action:             RuleAllow,
+				RemoteAddressesURL: p("file:///etc/anubis/bots.json"),
+			},
+			err: nil,
+		},
+		{
 			name: "remote addresses url empty",
 			bot: BotConfig{
 				Name:               "openai-searchbot",
