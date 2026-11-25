@@ -179,6 +179,35 @@ func (s *Server) shouldRetryMissingTestCookie(r *http.Request) bool {
 	return s.store.Set(r.Context(), key, []byte("1"), 30*time.Minute) == nil
 }
 
+const (
+	challengeMetadataUserAgent = "User-Agent"
+	challengeMetadataRealIP    = "X-Real-IP"
+)
+
+func challengeClientIPsMatch(issuedIP, requestIP string) bool {
+	return canonicalClientIP(issuedIP) == canonicalClientIP(requestIP)
+}
+
+func canonicalClientIP(ip string) string {
+	if addr, err := netip.ParseAddr(ip); err == nil {
+		return addr.Unmap().String()
+	}
+	return ip
+}
+
+// challengeClientMatchesRequest ensures that a challenge can only be spent by
+// the client that requested it. The values are not secrets, but reusing a
+// solved challenge from a different User-Agent or IP address would turn a
+// challenge ticket into a transferable clearance token.
+func challengeClientMatchesRequest(chall *challenge.Challenge, r *http.Request) bool {
+	if chall == nil || r == nil {
+		return false
+	}
+
+	return chall.Metadata[challengeMetadataUserAgent] == r.Header.Get(challengeMetadataUserAgent) &&
+		challengeClientIPsMatch(chall.Metadata[challengeMetadataRealIP], r.Header.Get(challengeMetadataRealIP))
+}
+
 func (s *Server) issueChallenge(ctx context.Context, r *http.Request, lg *slog.Logger, cr policy.CheckResult, rule *policy.Bot) (*challenge.Challenge, error) {
 	if cr.Rule != config.RuleChallenge {
 		slog.ErrorContext(ctx, "this should be impossible, asked to issue a challenge but the rule is not a challenge rule", "cr", cr, "rule", rule)
@@ -212,9 +241,9 @@ func (s *Server) issueChallenge(ctx context.Context, r *http.Request, lg *slog.L
 		PolicyRuleHash: rule.Hash(),
 		Extensions:     slices.Clone(rule.Challenge.Extensions),
 		Metadata: map[string]string{
-			"User-Agent": r.Header.Get("User-Agent"),
-			"X-Real-IP":  r.Header.Get("X-Real-IP"),
-			"Referer":    r.Header.Get("Referer"),
+			challengeMetadataUserAgent: r.Header.Get(challengeMetadataUserAgent),
+			challengeMetadataRealIP:    r.Header.Get(challengeMetadataRealIP),
+			"Referer":                  r.Header.Get("Referer"),
 		},
 	}
 
@@ -669,6 +698,12 @@ func (s *Server) PassChallenge(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		lg.ErrorContext(r.Context(), "getChallenge failed", "err", err)
 		s.respondWithError(w, r, fmt.Sprintf("%s: %s", localizer.T("internal_server_error"), "getChallenge failed"), makeCode(err))
+		return
+	}
+
+	if !challengeClientMatchesRequest(chall, r) {
+		lg.DebugContext(r.Context(), "challenge client binding mismatch")
+		s.respondWithStatus(w, r, localizer.T("access_denied"), makeCode(challenge.ErrFailed), http.StatusForbidden)
 		return
 	}
 
