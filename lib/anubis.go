@@ -98,6 +98,18 @@ var (
 	}, []string{"asn", "asn_description"})
 )
 
+// ErrZeroCostChallenge is returned when a challenge has no client cost. Such a
+// challenge must never be stored as a redeemable ticket or exchanged for a
+// clearance cookie.
+var ErrZeroCostChallenge = errors.New("zero-difficulty challenges cannot be credentials")
+
+// IsZeroCostDifficulty reports whether difficulty represents a challenge with
+// no effective client cost. Negative values are invalid configuration and are
+// rejected at the security boundary as well.
+func IsZeroCostDifficulty(difficulty int) bool {
+	return difficulty <= 0
+}
+
 type Server struct {
 	challengeLocks [256]sync.Mutex
 	next           http.Handler
@@ -166,7 +178,7 @@ func (s *Server) getChallenge(r *http.Request) (*challenge.Challenge, error) {
 // looping.
 func (s *Server) shouldRetryMissingTestCookie(r *http.Request) bool {
 	chall, err := s.getChallenge(r)
-	if err != nil || chall.Spent {
+	if err != nil || chall.Spent || IsZeroCostDifficulty(chall.Difficulty) {
 		return false
 	}
 
@@ -190,6 +202,10 @@ func (s *Server) issueChallenge(ctx context.Context, r *http.Request, lg *slog.L
 			Difficulty: s.policy.DefaultDifficulty,
 			Algorithm:  config.DefaultAlgorithm,
 		}
+	}
+
+	if IsZeroCostDifficulty(rule.Challenge.Difficulty) {
+		return nil, fmt.Errorf("%w: rule %q", ErrZeroCostChallenge, rule.Name)
 	}
 
 	id, err := uuid.NewV7()
@@ -675,6 +691,16 @@ func (s *Server) PassChallenge(w http.ResponseWriter, r *http.Request) {
 	if chall.Spent {
 		lg.ErrorContext(r.Context(), "double spend prevented", "reason", "double_spend")
 		s.respondWithError(w, r, fmt.Sprintf("%s: %s", localizer.T("internal_server_error"), "double_spend"), "")
+		return
+	}
+
+	ruleIsZeroCost := rule == nil || rule.Challenge == nil || IsZeroCostDifficulty(rule.Challenge.Difficulty)
+	if IsZeroCostDifficulty(chall.Difficulty) || ruleIsZeroCost {
+		lg.WarnContext(r.Context(), "refusing zero-cost challenge as credential", "challenge", chall.ID, "reason", "zero_difficulty")
+		asn, asnDesc := asnFromContext(r.Context())
+		failedValidations.WithLabelValues(chall.Method, asn, asnDesc).Inc()
+		s.ClearCookie(w, CookieOpts{Path: cookiePath, Host: r.Host})
+		s.respondWithStatus(w, r, localizer.T("access_denied"), makeCode(ErrZeroCostChallenge), http.StatusForbidden)
 		return
 	}
 

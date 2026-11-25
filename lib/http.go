@@ -308,10 +308,6 @@ func (s *Server) RenderIndex(w http.ResponseWriter, r *http.Request, cr policy.C
 		return
 	}
 
-	{
-		asn, asnDesc := asnFromContext(r.Context())
-		challengesIssued.WithLabelValues("embedded", asn, asnDesc).Add(1)
-	}
 	chall, err := s.issueChallenge(r.Context(), r, lg, cr, rule)
 	if err != nil {
 		lg.ErrorContext(r.Context(), "can't get challenge", "err", err)
@@ -322,6 +318,11 @@ func (s *Server) RenderIndex(w http.ResponseWriter, r *http.Request, cr policy.C
 		s.ClearCookie(w, CookieOpts{Name: anubis.TestCookieName, Host: r.Host})
 		s.respondWithError(w, r, fmt.Sprintf("%s: %s", localizer.T("internal_server_error"), algorithm), makeCode(err))
 		return
+	}
+
+	{
+		asn, asnDesc := asnFromContext(r.Context())
+		challengesIssued.WithLabelValues("embedded", asn, asnDesc).Add(1)
 	}
 
 	lg = lg.With("challenge", chall.ID)
