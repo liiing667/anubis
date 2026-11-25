@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -31,6 +32,10 @@ func TestChallengeSpendIsExclusive(t *testing.T) {
 	ts := httptest.NewServer(internal.RemoteXRealIP(true, "tcp", srv))
 	t.Cleanup(ts.Close)
 	c := makeChallenge(t, ts, httpClient(t))
+	tsURL, err := url.Parse(ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
 	j := store.JSON[challenge.Challenge]{Underlying: srv.store}
 	stored, err := j.Get(t.Context(), "challenge:"+c.ID)
 	if err != nil {
@@ -43,6 +48,7 @@ func TestChallengeSpendIsExclusive(t *testing.T) {
 		wg.Go(func() {
 			<-gate
 			req := httptest.NewRequest("GET", "/?redir=/&id="+c.ID+"&nonce=0&elapsedTime=1&response="+internal.SHA256sum(stored.RandomData+"0"), nil)
+			req.Host = tsURL.Host
 			req.Header.Set("X-Real-IP", "192.0.2.1")
 			req.Header.Set("User-Agent", "Mozilla/5.0")
 			req.AddCookie(&http.Cookie{Name: srv.cookieName(anubis.TestCookieName), Value: c.ID})

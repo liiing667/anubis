@@ -166,7 +166,7 @@ func (s *Server) getChallenge(r *http.Request) (*challenge.Challenge, error) {
 // looping.
 func (s *Server) shouldRetryMissingTestCookie(r *http.Request) bool {
 	chall, err := s.getChallenge(r)
-	if err != nil || chall.Spent {
+	if err != nil || chall.Spent || !challengeHostMatchesRequest(chall, r) {
 		return false
 	}
 
@@ -177,6 +177,18 @@ func (s *Server) shouldRetryMissingTestCookie(r *http.Request) bool {
 
 	// Same lifetime as an issued challenge.
 	return s.store.Set(r.Context(), key, []byte("1"), 30*time.Minute) == nil
+}
+
+// challengeHostMatchesRequest reports whether a challenge was issued for the
+// host that is trying to spend it. Challenge tickets are stored server-side and
+// the ID is not tied to a browser, so without this check a ticket issued for one
+// tenant could be redeemed on another tenant served by the same instance.
+func challengeHostMatchesRequest(chall *challenge.Challenge, r *http.Request) bool {
+	if chall == nil || r == nil {
+		return false
+	}
+
+	return strings.EqualFold(chall.Metadata["Host"], r.Host)
 }
 
 func (s *Server) issueChallenge(ctx context.Context, r *http.Request, lg *slog.Logger, cr policy.CheckResult, rule *policy.Bot) (*challenge.Challenge, error) {
@@ -215,6 +227,7 @@ func (s *Server) issueChallenge(ctx context.Context, r *http.Request, lg *slog.L
 			"User-Agent": r.Header.Get("User-Agent"),
 			"X-Real-IP":  r.Header.Get("X-Real-IP"),
 			"Referer":    r.Header.Get("Referer"),
+			"Host":       r.Host,
 		},
 	}
 
@@ -669,6 +682,12 @@ func (s *Server) PassChallenge(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		lg.ErrorContext(r.Context(), "getChallenge failed", "err", err)
 		s.respondWithError(w, r, fmt.Sprintf("%s: %s", localizer.T("internal_server_error"), "getChallenge failed"), makeCode(err))
+		return
+	}
+
+	if !challengeHostMatchesRequest(chall, r) {
+		lg.DebugContext(r.Context(), "challenge host binding mismatch", "issued_host", chall.Metadata["Host"], "request_host", r.Host)
+		s.respondWithStatus(w, r, localizer.T("access_denied"), makeCode(challenge.ErrFailed), http.StatusForbidden)
 		return
 	}
 
