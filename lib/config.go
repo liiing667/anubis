@@ -61,6 +61,11 @@ type Options struct {
 	PreserveRefererQueryParam bool
 }
 
+// Valid reports whether the server options are internally consistent.
+func (opts Options) Valid() error {
+	return validateCookieDomain(opts.CookieDomain)
+}
+
 func LoadPoliciesOrDefault(ctx context.Context, fname string, defaultDifficulty int, logLevel string, subrequestMode bool) (*policy.ParsedConfig, error) {
 	var fin io.ReadCloser
 	var err error
@@ -137,6 +142,10 @@ func New(opts Options) (*Server, error) {
 	if len(opts.HS512Secret) > 0 && len(opts.HS512Secret) < sha512.Size {
 		return nil, jwt.ErrInvalidKey
 	}
+	if err := opts.Valid(); err != nil {
+		return nil, err
+	}
+	opts.CookieDomain = strings.TrimPrefix(strings.TrimSpace(opts.CookieDomain), ".")
 	if opts.Logger == nil {
 		opts.Logger = slog.With("subsystem", "anubis")
 	}

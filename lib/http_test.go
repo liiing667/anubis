@@ -1,6 +1,7 @@
 package lib
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,6 +11,56 @@ import (
 	"github.com/TecharoHQ/anubis/internal"
 	"github.com/TecharoHQ/anubis/lib/policy"
 )
+
+func TestValidateCookieDomain(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		domain  string
+		wantErr bool
+	}{
+		{name: "empty", domain: ""},
+		{name: "registrable domain", domain: "techaro.lol"},
+		{name: "uppercase registrable domain", domain: "TECHARO.LOL"},
+		{name: "controlled subdomain", domain: "anubis.techaro.lol"},
+		{name: "leading dot", domain: ".techaro.lol"},
+		{name: "ipv4", domain: "127.0.0.1"},
+		{name: "localhost", domain: "localhost"},
+		{name: "private suffix tenant", domain: "tenant.github.io"},
+		{name: "icann public suffix", domain: "com", wantErr: true},
+		{name: "uppercase icann public suffix", domain: "COM", wantErr: true},
+		{name: "multi-label icann public suffix", domain: "co.uk", wantErr: true},
+		{name: "leading dot public suffix", domain: ".co.uk", wantErr: true},
+		{name: "private public suffix", domain: "github.io", wantErr: true},
+		{name: "trailing dot", domain: "techaro.lol.", wantErr: true},
+		{name: "port", domain: "techaro.lol:443", wantErr: true},
+		{name: "wildcard", domain: "*.techaro.lol", wantErr: true},
+		{name: "ipv6", domain: "::1", wantErr: true},
+		{name: "empty label", domain: "foo..techaro.lol", wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateCookieDomain(tt.domain)
+			if tt.wantErr && !errors.Is(err, ErrInvalidCookieDomain) {
+				t.Errorf("wanted invalid cookie domain error, got: %v", err)
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("wanted valid cookie domain, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestNewRejectsPublicSuffixCookieDomain(t *testing.T) {
+	if _, err := New(Options{CookieDomain: "co.uk"}); !errors.Is(err, ErrInvalidCookieDomain) {
+		t.Fatalf("wanted invalid cookie domain error, got: %v", err)
+	}
+}
+
+func TestCookieDomainDoesNotWidenToPublicSuffix(t *testing.T) {
+	srv := &Server{opts: Options{CookieDomain: "co.uk"}}
+	if got := srv.cookieDomain("tenant.example.co.uk"); got != "" {
+		t.Errorf("wanted host-only cookie domain, got: %q", got)
+	}
+}
 
 func TestSetCookie(t *testing.T) {
 	for _, tt := range []struct {

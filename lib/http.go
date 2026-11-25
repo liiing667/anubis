@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strings"
@@ -32,8 +33,74 @@ import (
 var domainMatchRegexp = regexp.MustCompile(`^((xn--)?[a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$`)
 
 var (
-	ErrActualAnubisBug = errors.New("this is an actual bug in Anubis, please file an issue with the magic string 'taco bell'")
+	ErrActualAnubisBug     = errors.New("this is an actual bug in Anubis, please file an issue with the magic string 'taco bell'")
+	ErrInvalidCookieDomain = errors.New("invalid cookie domain")
 )
+
+// validateCookieDomain checks that domain can safely be used as the Domain
+// attribute of an Anubis cookie. The configured domain may be a registrable
+// domain or a subdomain of one, which lets administrators share a session
+// across subdomains they control. It must not be a public suffix: cookies set
+// for a public suffix would be scoped to unrelated tenants that happen to
+// share that suffix.
+func validateCookieDomain(domain string) error {
+	if domain == "" {
+		return nil
+	}
+
+	d := strings.TrimPrefix(strings.TrimSpace(domain), ".")
+	if d == "" || strings.HasSuffix(d, ".") {
+		return fmt.Errorf("%w %q", ErrInvalidCookieDomain, domain)
+	}
+
+	// IP addresses cannot be public suffixes, and existing installations use
+	// them for local deployments. IPv6 literals cannot be used as cookie
+	// domains at all.
+	if addr, err := netip.ParseAddr(d); err == nil {
+		if addr.Is4() || addr.Is4In6() {
+			return nil
+		}
+		return fmt.Errorf("%w %q: IPv6 addresses cannot be used as cookie domains", ErrInvalidCookieDomain, domain)
+	}
+
+	if err := (&http.Cookie{Name: "anubis", Value: "anubis", Domain: d}).Valid(); err != nil {
+		return fmt.Errorf("%w %q: %w", ErrInvalidCookieDomain, domain, err)
+	}
+
+	d = strings.ToLower(d)
+	publicSuffix, icann := publicsuffix.PublicSuffix(d)
+	if publicSuffix == d {
+		// Single-label, non-ICANN names such as "localhost" are used by local
+		// deployments. They cannot contain unrelated tenants because no one
+		// can register sibling names under them. ICANN suffixes such as "com"
+		// and private suffixes such as "github.io" are shared registries and
+		// must never be used as a cookie scope.
+		if !icann && !strings.Contains(d, ".") {
+			return nil
+		}
+		return fmt.Errorf("%w %q: domain is a public suffix", ErrInvalidCookieDomain, domain)
+	}
+
+	return nil
+}
+
+// cookieDomain returns the Domain attribute that should be used for a cookie
+// set in response to a request for host. Invalid configured domains are
+// ignored so that a cookie is never widened beyond the request's own scope.
+func (s *Server) cookieDomain(host string) string {
+	domain := strings.TrimPrefix(strings.TrimSpace(s.opts.CookieDomain), ".")
+
+	if s.opts.CookieDynamicDomain && domainMatchRegexp.MatchString(host) {
+		if etld, err := publicsuffix.EffectiveTLDPlusOne(host); err == nil {
+			domain = etld
+		}
+	}
+
+	if err := validateCookieDomain(domain); err != nil {
+		return ""
+	}
+	return domain
+}
 
 // matchRedirectDomain returns true if host matches any of the allowed redirect
 // domain patterns. Patterns may contain '*' which are matched using the
@@ -134,7 +201,7 @@ func (s *Server) getCookie(r *http.Request, base string) (*http.Cookie, error) {
 }
 
 func (s *Server) SetCookie(w http.ResponseWriter, cookieOpts CookieOpts) {
-	var domain = s.opts.CookieDomain
+	var domain = s.cookieDomain(cookieOpts.Host)
 	var name = anubis.CookieName
 	var path = "/"
 	var sameSite = s.opts.CookieSameSite
@@ -144,11 +211,6 @@ func (s *Server) SetCookie(w http.ResponseWriter, cookieOpts CookieOpts) {
 	}
 	if cookieOpts.Path != "" {
 		path = cookieOpts.Path
-	}
-	if s.opts.CookieDynamicDomain && domainMatchRegexp.MatchString(cookieOpts.Host) {
-		if etld, err := publicsuffix.EffectiveTLDPlusOne(cookieOpts.Host); err == nil {
-			domain = etld
-		}
 	}
 
 	if cookieOpts.Expiry == 0 {
@@ -173,7 +235,7 @@ func (s *Server) SetCookie(w http.ResponseWriter, cookieOpts CookieOpts) {
 }
 
 func (s *Server) ClearCookie(w http.ResponseWriter, cookieOpts CookieOpts) {
-	var domain = s.opts.CookieDomain
+	var domain = s.cookieDomain(cookieOpts.Host)
 	var name = anubis.CookieName
 	var path = "/"
 	var sameSite = s.opts.CookieSameSite
@@ -183,11 +245,6 @@ func (s *Server) ClearCookie(w http.ResponseWriter, cookieOpts CookieOpts) {
 	}
 	if cookieOpts.Path != "" {
 		path = cookieOpts.Path
-	}
-	if s.opts.CookieDynamicDomain && domainMatchRegexp.MatchString(cookieOpts.Host) {
-		if etld, err := publicsuffix.EffectiveTLDPlusOne(cookieOpts.Host); err == nil {
-			domain = etld
-		}
 	}
 	if s.opts.CookieSameSite == http.SameSiteNoneMode && !s.opts.CookieSecure {
 		sameSite = http.SameSiteLaxMode
